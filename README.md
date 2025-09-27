@@ -80,7 +80,7 @@ docker run --rm -it \
 
 In the GUI
 
-    Scoring URL: http://127.0.0.1:8000/score (or any remote API, e.g., https://api.example.com/score)
+    Scoring URL: http://127.0.0.1:8000/score (that is for testing but to try the model use https://yamnet-service-terzmh6obq-uc.a.run.app/)
 
     Select Input and VirtualMic output → Start
 
@@ -88,11 +88,11 @@ In the GUI
 
 You don’t need to rebuild. In the GUI, change Scoring URL to your endpoint:
 
-https://api.your-domain.com/score
+https://api.your-domain.com/score (https://yamnet-service-terzmh6obq-uc.a.run.app/ in this case )
 
 (Optional) prefill via env var when running Docker:
 
-docker run ... -e DEFAULT_SCORE_URL="https://api.your-domain.com/score" mic-app
+docker run ... -e DEFAULT_SCORE_URL="https://api.your-domain.com/score" mic-app ( in this case try https://yamnet-service-terzmh6obq-uc.a.run.app/)
 
 4) Useful knobs
 
@@ -347,5 +347,6 @@ For support, questions, or feature requests:
 
 
 **Note**: This application is designed to assist individuals with Tourette's syndrome but should not replace professional medical advice or treatment.
+
 
 
