@@ -1,0 +1,7 @@
+{
+  "yamnet_handle": "https://tfhub.dev/google/yamnet/1",
+  "sr": 16000,
+  "dropout": 0.2,
+  "max_len_s": 2.0,
+  "threshold": 0.5
+}

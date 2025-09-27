@@ -1,0 +1,10 @@
+fastapi
+uvicorn[standard]
+pydantic
+torch
+tensorflow
+tensorflow_hub
+numpy
+soundfile
+librosa
+
