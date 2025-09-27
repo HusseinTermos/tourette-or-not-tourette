@@ -62,7 +62,73 @@ With the test API (score = 0.4), the Output meter ~0 (muted).
 
 2) Docker (GUI in container, API on host)
 Build the image
+docker build -f Dockerfile.app -t mic-app .
 
+Run (X11)
+
+xhost +local:docker
+docker run --rm -it \
+  --network=host \
+  --device /dev/snd \
+  -e DISPLAY=$DISPLAY \
+  -v /tmp/.X11-unix:/tmp/.X11-unix:rw \
+  -v $XDG_RUNTIME_DIR/pulse:/run/user/1000/pulse \
+  mic-app
+
+    Using --network=host lets the GUI call http://127.0.0.1:8000/score on your host directly.
+    Wayland users: switch to the Wayland socket mount or run an Xwayland session and keep the X11 command above.
+
+In the GUI
+
+    Scoring URL: http://127.0.0.1:8000/score (or any remote API, e.g., https://api.example.com/score)
+
+    Select Input and VirtualMic output → Start
+
+3) Pointing to a hosted API
+
+You don’t need to rebuild. In the GUI, change Scoring URL to your endpoint:
+
+https://api.your-domain.com/score
+
+(Optional) prefill via env var when running Docker:
+
+docker run ... -e DEFAULT_SCORE_URL="https://api.your-domain.com/score" mic-app
+
+4) Useful knobs
+
+    Sample rate: default 48,000 Hz (change in GUI)
+
+    Block size: default 1024 frames (~21 ms @ 48 kHz)
+
+    Threshold: blocks if score < threshold
+
+    Env:
+
+        USE_LOCAL_SCORER=1 → bypass HTTP and always use score=0.4
+
+        USE_LOCAL_SCORER=0 (default in Dockerfile.app) → call the API
+
+5) Verify it’s working
+
+    Meters: Input should move when you speak; with a low score, Output ~0.
+
+    Server logs: If using the test API, print body size to confirm requests:
+
+    @app.post("/score")
+    async def score(request: Request):
+        data = await request.json()
+        print("len(audio_base64) =", len(data.get("audio_base64","")))
+        return {"score": 0.4}
+
+6) Troubleshooting
+
+    ALSA/PortAudio errors → Set 48 kHz, Block 1024–2048 in GUI.
+
+    No devices in Docker → ensure --device /dev/snd and Pulse mount -v $XDG_RUNTIME_DIR/pulse:/run/user/1000/pulse.
+
+    GUI doesn’t show (Docker/X11) → run xhost +local:docker and mount /tmp/.X11-unix.
+
+    Apps can’t see the mic → choose “Monitor of VirtualMic” as microphone in the target app.
     Apps can’t see the mic → choose “Monitor of VirtualMic” as microphone in the target app.
 rks as a system-wide extension to filter audio input for users with Tourette's syndrome. When the AI detects stuttering or vocal tics, it automatically removes or suppresses them from the microphone stream, allowing for clearer communication across all applications and websites.
 
@@ -281,4 +347,5 @@ For support, questions, or feature requests:
 
 
 **Note**: This application is designed to assist individuals with Tourette's syndrome but should not replace professional medical advice or treatment.
+
 
