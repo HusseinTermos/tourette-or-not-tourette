@@ -1,71 +1,178 @@
-﻿# Tourette's Speech Assistant
+﻿docker run --rm -it \
+<div align="center">
 
-A real-time desktop application that removes stuttering and tics from microphone input for Tourette's syndrome patients, using DL models deployed on Google Cloud.
+# Tourette's Speech Assistant
+
+Empowering clearer speech: real-time filtering of vocal tics and stutter events using an AI audio classifier.
+
+</div>
+
+---
+
+## TL;DR
+Desktop app that captures microphone audio, sends short chunks to a hosted AI scoring endpoint (YAMNet + custom head), and suppresses blocks likely containing tic/stutter artifacts before forwarding them to a virtual microphone that other apps (Zoom, Meet, Discord, etc.) can use.
+
+Hosted model endpoint: `https://yamnet-service-terzmh6obq-uc.a.run.app/score`
+
+---
 
 ## 🎯 Overview
+Our project reduces audible tics and disruptive stutter bursts in live voice communication. It operates as a system-level filtering layer: your real mic → classifier → cleaned stream → virtual mic consumed by other applications.
 
-This application woHow to Run
+Core goals:
+- Lower social friction for users with Tourette's & speech disfluencies
+- Maintain very low latency
+- Provide transparent controls & local fallback options
 
-There are two ways to run the app:
+## Value Proposition
+- **Speak Freely & Confidently**: Reduce the self-consciousness associated with vocal tics and stutters in online meetings, chats, and recordings.
+- **Seamless Integration**: Works automatically with all your favorite apps (Zoom, Discord, Google Meet, etc.) with a one-time setup.
+- **User-Controlled & Private**: You control the filtering sensitivity. Your audio is processed in real-time and never stored.
 
-    Native (Linux) — simplest for development
+## Features
+- Real-time streaming classification
+- YAMNet embeddings + lightweight PyTorch classifier head
+- Adjustable suppression threshold
+- Works with any app that can select an input device
+- Virtual microphone routing (PulseAudio/PipeWire sink)
+- Hosted API + optional local dummy scorer
+- Privacy-friendly: no long-term storage of audio
 
-    Docker (GUI inside container, API on host) — portable and clean
+## Model & Data
+| Component | Details |
+|-----------|---------|
+| Backbone  | YAMNet (TF Hub) frozen, 1024‑D embeddings |
+| Head      | Dropout → Linear(256) → ReLU → Dropout → Linear(1) (sigmoid at inference) |
+| Task      | Binary classification (tic/stutter = 1, normal = 0) |
+| Windowing | 2s segments, 0.5s hop (training/augmentation) |
+| Inference Blocks | ~20–40 ms PCM chunks aggregated into score smoothing |
 
-The app sends each audio block to a Scoring URL as JSON:
+### Dataset
+We manually assembled a custom dataset of 120+ labeled audio samples (positive tic/stutter vs negative normal speech) sourced from publicly available social media clips. Steps taken:
+- Curated short speech segments with and without vocal tics
+- Normalized to mono 16 kHz
+- Segmented with sliding windows for augmentation
+- Person-based split to avoid speaker leakage
 
-{ "audio_base64": "<base64 of PCM block>", "top_k": 3 }
+Limitations:
+- Small dataset size (still exploratory)
+- Social media audio may include compression artifacts
+- Model may misclassify atypical speech prosody
 
-and mutes the block if score < threshold.
-0) Create a virtual “mic” sink (host)
+## System Architecture
+```
+┌──────────────┐   ┌──────────────┐   ┌────────────────────┐   ┌───────────────────┐
+│  Microphone  │→→│  GUI Capture  │→→│  Scoring Endpoint   │→→│  Suppression Logic │
+└──────────────┘   │ (PySide6)    │   │  (Hosted API)      │   └─────────┬─────────┘
+               └──────┬──────┘   └────────────────────┘             │
+                    │                                            │ filtered
+                    ▼                                            ▼
+               ┌──────────────┐                             ┌──────────────┐
+               │ Virtual Sink │→→ Apps (Zoom/Meet/etc.)     │ User Monitor │
+               └──────────────┘                             └──────────────┘
+```
 
-Other apps will use the monitor of this sink as their microphone.
-
-pactl load-module module-null-sink sink_name=VirtualMic sink_properties=device.description=VirtualMic
-# later: pactl unload-module module-null-sink
-
-    On Windows/macOS, use VB-CABLE / BlackHole instead.
-
-1) Native (Linux)
-Prereqs
-
-    Python 3.10+
-
-    PulseAudio or PipeWire (for audio routing)
-
-Install & run
-
+## Installation (Linux Dev Environment)
+```bash
 python3 -m venv .venv
 source .venv/bin/activate
-pip install PySide6 sounddevice requests numpy fastapi uvicorn
+pip install -r requirements.txt  # (create one if not present)
+```
+If you don't yet have a `requirements.txt`, a minimal starter:
+```txt
+PySide6
+sounddevice
+requests
+numpy
+fastapi
+uvicorn
+torch
+tensorflow
+tensorflow-hub
+```
 
-# (Optional) start a local test API that always returns {"score": 0.4}
+### Create Virtual Microphone (PulseAudio / PipeWire)
+```bash
+pactl load-module module-null-sink sink_name=VirtualMic sink_properties=device.description=VirtualMic
+# To remove later:
+
+```
+On Windows/macOS use VB-CABLE or BlackHole.
+
+## Running the App
+### Option 1: Local test scorer
+```bash
 uvicorn server:app --host 127.0.0.1 --port 8000
-# leave it running in a separate terminal
-
-# Run the GUI
 python gui_mic_filter.py
+```
+Then set Scoring URL: `http://127.0.0.1:8000/score`.
 
-In the GUI
+### Option 2: Hosted model
+Set Scoring URL: `https://yamnet-service-terzmh6obq-uc.a.run.app/score`
 
-   Input device: your real mic
+### GUI Checklist
+1. Input Device = your real microphone
+2. Output Device = VirtualMic
+3. Threshold = start around 0.5
+4. Click Start → watch Input vs Output meters
 
-   Output device: VirtualMic
+## API Contract
+Endpoint (POST): `/score`
+```jsonc
+{
+  "audio_base64": "<base64 PCM int16 or float32 mono>",
+  "top_k": 3
+}
+```
+Successful response:
+```json
+{ "score": 0.42 }
+```
+Interpretation: lower score → more suppression (depending on inversion logic you implement). Adjust threshold to taste.
 
-   Scoring URL: http://127.0.0.1:8000/score (or your deployed endpoint)
+### Example (Python client snippet)
+```python
+import base64, requests, sounddevice as sd, numpy as np
 
-   Threshold: 0.5 (default)
+def record_block(seconds=0.3, sr=48000):
+   audio = sd.rec(int(seconds*sr), samplerate=sr, channels=1, dtype='float32')
+   sd.wait()
+   return audio.squeeze()
 
-   Click Start
+blk = record_block()
+payload = {
+   "audio_base64": base64.b64encode(blk.tobytes()).decode(),
+   "top_k": 3
+}
+r = requests.post("https://yamnet-service-terzmh6obq-uc.a.run.app/score", json=payload, timeout=5)
+print(r.json())
+```
 
-With the test API (score = 0.4), the Output meter ~0 (muted).
+## 🛠 Development Notes
+Training logic currently lives in notebooks (`model2.ipynb`, `termos_data.ipynb`). Consider exporting core model code into a module for reproducibility. Future refactor suggestion:
+```
+src/
+  data/
+  models/
+  training/
+  gui/
+```
 
-2) Docker (GUI in container, API on host)
-Build the image
+## Metrics & Evaluation
+Use: Accuracy, Precision, Recall, F1, Confusion Matrix. Include per-speaker breakdown when expanding dataset. Add ROC/AUC once you log probabilities systematically.
+
+## Roadmap
+- [ ] Add confidence smoothing (EMA over last N blocks)
+- [ ] Implement per-speaker calibration
+- [ ] Export ONNX / TorchScript for lighter inference
+- [ ] Add Windows/macOS virtual mic setup docs
+- [ ] Provide packaged installers (.deb / .msi)
+- [ ] Add logging & opt‑in telemetry
+- [ ] Collect more diverse tic types (ethical sourcing + consent)
+
+## Docker (Optional)
+```bash
 docker build -f Dockerfile.app -t mic-app .
-
-Run (X11)
-
 xhost +local:docker
 docker run --rm -it \
   --network=host \
@@ -74,73 +181,44 @@ docker run --rm -it \
   -v /tmp/.X11-unix:/tmp/.X11-unix:rw \
   -v $XDG_RUNTIME_DIR/pulse:/run/user/1000/pulse \
   mic-app
+```
+If using Wayland, adapt DISPLAY/socket mounts accordingly.
 
-    Using --network=host lets the GUI call http://127.0.0.1:8000/score on your host directly.
-    Wayland users: switch to the Wayland socket mount or run an Xwayland session and keep the X11 command above.
+## 🧯 Troubleshooting
+| Issue | Suggestion |
+|-------|------------|
+| No devices listed | Check PulseAudio / PipeWire is running, permissions, container flags |
+| Output always muted | Threshold too high or scorer always returns low values |
+| High latency | Reduce block size (trade-off: more HTTP calls) |
+| Distortion | Ensure consistent sample rate (48k GUI vs 16k model) |
+| API timeouts | Add retry/backoff, verify endpoint health |
 
-In the GUI
+## 🔒 Privacy & Ethics
+- Streaming only; no persistent storage by default
+- Social media sourced dataset: avoid redistribution without rights
+- Consider adding an in-app consent & transparency panel
+- Provide a local inference option for sensitive environments
 
-    Scoring URL: http://127.0.0.1:8000/score (that is for testing but to try the model use https://yamnet-service-terzmh6obq-uc.a.run.app/)
+## 🤝 Contributing
+```bash
+git checkout -b feature/your-feature
+# make changes
+git commit -m "feat: add your feature"
+git push origin feature/your-feature
+```
+Open a PR describing motivation + screenshots (if UI change).
 
-    Select Input and VirtualMic output → Start
+## 📜 License
+MIT (see `LICENSE`).
 
-3) Pointing to a hosted API
+## 🙏 Acknowledgments
+YAMNet (Google), AudioSet, PySide6, open-source community, and individuals who publicly share educational content about Tourette's (ethical use only).
 
-You don’t need to rebuild. In the GUI, change Scoring URL to your endpoint:
+## ⚠️ Disclaimer
+Not a medical device. Does not treat or diagnose. Always consult healthcare professionals for clinical needs.
 
-https://api.your-domain.com/score (https://yamnet-service-terzmh6obq-uc.a.run.app/ in this case )
-
-(Optional) prefill via env var when running Docker:
-
-docker run ... -e DEFAULT_SCORE_URL="https://api.your-domain.com/score" mic-app ( in this case try https://yamnet-service-terzmh6obq-uc.a.run.app/)
-
-4) Useful knobs
-
-    Sample rate: default 48,000 Hz (change in GUI)
-
-    Block size: default 1024 frames (~21 ms @ 48 kHz)
-
-    Threshold: blocks if score < threshold
-
-    Env:
-
-        USE_LOCAL_SCORER=1 → bypass HTTP and always use score=0.4
-
-        USE_LOCAL_SCORER=0 (default in Dockerfile.app) → call the API
-
-5) Verify it’s working
-
-    Meters: Input should move when you speak; with a low score, Output ~0.
-
-    Server logs: If using the test API, print body size to confirm requests:
-
-    @app.post("/score")
-    async def score(request: Request):
-        data = await request.json()
-        print("len(audio_base64) =", len(data.get("audio_base64","")))
-        return {"score": 0.4}
-
-6) Troubleshooting
-
-    ALSA/PortAudio errors → Set 48 kHz, Block 1024–2048 in GUI.
-
-    No devices in Docker → ensure --device /dev/snd and Pulse mount -v $XDG_RUNTIME_DIR/pulse:/run/user/1000/pulse.
-
-    GUI doesn’t show (Docker/X11) → run xhost +local:docker and mount /tmp/.X11-unix.
-
-    Apps can’t see the mic → choose “Monitor of VirtualMic” as microphone in the target app.
-    Apps can’t see the mic → choose “Monitor of VirtualMic” as microphone in the target app.
-rks as a system-wide extension to filter audio input for users with Tourette's syndrome. When the AI detects stuttering or vocal tics, it automatically removes or suppresses them from the microphone stream, allowing for clearer communication across all applications and websites.
-
-### Key Features
-
-- **Real-time Audio Processing**: Processes microphone input in real-time with minimal latency
-- **AI-Powered Detection**: Uses YAMNet with custom classifier head for accurate tic/stutter detection
-- **System-wide Integration**: Works as an extension to all applications and websites that use microphone
-- **Cloud-based Inference**: Leverages Google Cloud for scalable AI processing
-- **Cross-platform Desktop App**: Built with PySide6 for native desktop experience
-- **Privacy-focused**: Audio processing with secure cloud integration
-
+---
+Made with focus on accessibility and dignity.
 ## 🧠 AI Architecture
 
 ### Model Components
@@ -161,10 +239,11 @@ rks as a system-wide extension to filter audio input for users with Tourette's s
 
 ### Training Data
 
-- Custom dataset with labeled audio segments
-- Binary classification: `0` (normal speech) vs `1` (tic/stutter)
-- Person-based train/test split to prevent data leakage
-- Data augmentation through temporal segmentation
+- **Custom Dataset**: We gathered our own dataset consisting of 120+ samples of both positive (tic/stutter) and negative (normal speech) audio samples, collected from social media platforms.
+- **Balanced Classification**: Binary classification with `0` (normal speech) vs `1` (tic/stutter) labels
+- **Diverse Sample Collection**: Audio samples collected from multiple speakers to ensure model generalization
+- **Person-based train/test split**: Prevents data leakage by ensuring no speaker appears in both training and testing sets
+- **Data augmentation**: Applied temporal segmentation through sliding windows to increase dataset size
 
 ## 🏗️ Architecture
 
@@ -217,11 +296,7 @@ The model inference service runs on Google Cloud Platform, providing scalable an
 3. **Configure API access**:
    - The model is already hosted and accessible via the provided API endpoint
    - No additional cloud setup required for basic usage
-
-4. **Run the application**:
-   ```bash
-   python main.py
-   ```
+   
 
 ## 🛠️ Development
 
@@ -284,69 +359,3 @@ The desktop application provides:
 - **Cloud Communication**: Secure API calls to Google Cloud
 - **Audio Playback**: Filtered audio output to system
 - **UI Management**: PySide6-based user interface
-
-## 🔒 Privacy & Security
-
-- **Minimal Data Retention**: Audio processed in real-time, not stored
-- **Encrypted Communication**: All cloud API calls use HTTPS
-- **Local Processing Option**: Fallback to local inference when available
-- **User Control**: Full control over when processing is active
-
-## 🤝 Contributing
-
-1. Fork the repository
-2. Create a feature branch (`git checkout -b feature/amazing-feature`)
-3. Commit your changes (`git commit -m 'Add amazing feature'`)
-4. Push to the branch (`git push origin feature/amazing-feature`)
-5. Open a Pull Request
-
-## 📋 Requirements
-
-### Core Dependencies
-```
-torch>=1.9.0
-tensorflow>=2.8.0
-tensorflow-hub>=0.12.0
-PySide6>=6.0.0
-librosa>=0.9.0
-soundfile>=0.10.0
-google-cloud-aiplatform>=1.0.0
-numpy>=1.21.0
-pandas>=1.3.0
-scikit-learn>=1.0.0
-```
-
-### Development Dependencies
-```
-jupyter>=1.0.0
-matplotlib>=3.5.0
-seaborn>=0.11.0
-pytest>=6.0.0
-```
-
-## 📝 License
-
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
-
-## 🙏 Acknowledgments
-
-- **YAMNet**: Google's YAMNet model for audio classification
-- **AudioSet**: Dataset used for YAMNet pre-training
-- **PySide6**: Qt for Python framework
-- **Google Cloud**: AI Platform for model deployment
-- **Tourette Association**: For guidance on condition understanding
-
-## 📞 Support
-
-For support, questions, or feature requests:
-- Open an issue on GitHub
-- Contact the development team
-- Check the documentation wiki
-
----
-
-
-**Note**: This application is designed to assist individuals with Tourette's syndrome but should not replace professional medical advice or treatment.
-
-
-
