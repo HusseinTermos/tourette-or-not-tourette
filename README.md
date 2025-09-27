@@ -16,7 +16,7 @@ Hosted model endpoint: `https://yamnet-service-terzmh6obq-uc.a.run.app/score`
 
 ---
 
-## 🎯 Overview
+##  Overview
 Our project reduces audible tics and disruptive stutter bursts in live voice communication. It operates as a system-level filtering layer: your real mic → classifier → cleaned stream → virtual mic consumed by other applications.
 
 Core goals:
@@ -30,7 +30,7 @@ Core goals:
 - **User-Controlled & Private**: You control the filtering sensitivity. Your audio is processed in real-time and never stored.
 
 ## Features
-- Real-time streaming classification
+- Near real-time streaming classification
 - YAMNet embeddings + lightweight PyTorch classifier head
 - Adjustable suppression threshold
 - Works with any app that can select an input device
@@ -100,15 +100,15 @@ pactl load-module module-null-sink sink_name=VirtualMic sink_properties=device.d
 On Windows/macOS use VB-CABLE or BlackHole.
 
 ## Running the App
-### Option 1: Local test scorer
+### Local test scorer just to make sure the app is running 
 ```bash
 uvicorn server:app --host 127.0.0.1 --port 8000
 python gui_mic_filter.py
 ```
-Then set Scoring URL: `http://127.0.0.1:8000/score`.
+Then set Test Scoring URL(change this after): `http://127.0.0.1:8000/score`.
 
 ### Option 2: Hosted model
-Set Scoring URL: `https://yamnet-service-terzmh6obq-uc.a.run.app/score`
+Set Scoring URL: `https://yamnet-tic-u3i46rlgra-ww.a.run.app/`
 
 ### GUI Checklist
 1. Input Device = your real microphone
@@ -120,8 +120,8 @@ Set Scoring URL: `https://yamnet-service-terzmh6obq-uc.a.run.app/score`
 Endpoint (POST): `/score`
 ```jsonc
 {
-  "audio_base64": "<base64 PCM int16 or float32 mono>",
-  "top_k": 3
+  "audio_b64": "<base64 PCM int16 or float32 mono>",
+  
 }
 ```
 Successful response:
@@ -141,14 +141,14 @@ def record_block(seconds=0.3, sr=48000):
 
 blk = record_block()
 payload = {
-   "audio_base64": base64.b64encode(blk.tobytes()).decode(),
-   "top_k": 3
+   "audio_b64": base64.b64encode(blk.tobytes()).decode(),
+   
 }
-r = requests.post("https://yamnet-service-terzmh6obq-uc.a.run.app/score", json=payload, timeout=5)
+r = requests.post("https://yamnet-tic-u3i46rlgra-ww.a.run.app/", json=payload, timeout=5)
 print(r.json())
 ```
 
-## 🛠 Development Notes
+##  Development Notes
 Training logic currently lives in notebooks (`model2.ipynb`, `termos_data.ipynb`). Consider exporting core model code into a module for reproducibility. Future refactor suggestion:
 ```
 src/
@@ -161,9 +161,9 @@ src/
 ## Metrics & Evaluation
 Use: Accuracy, Precision, Recall, F1, Confusion Matrix. Include per-speaker breakdown when expanding dataset. Add ROC/AUC once you log probabilities systematically.
 
-## Roadmap
+## Future Roadmap
 - [ ] Add confidence smoothing (EMA over last N blocks)
-- [ ] Implement per-speaker calibration
+- [ ] Implement per-speaker calibration allowing them to specify words that that they usually say in tics 
 - [ ] Export ONNX / TorchScript for lighter inference
 - [ ] Add Windows/macOS virtual mic setup docs
 - [ ] Provide packaged installers (.deb / .msi)
@@ -184,7 +184,7 @@ docker run --rm -it \
 ```
 If using Wayland, adapt DISPLAY/socket mounts accordingly.
 
-## 🧯 Troubleshooting
+##  Troubleshooting
 | Issue | Suggestion |
 |-------|------------|
 | No devices listed | Check PulseAudio / PipeWire is running, permissions, container flags |
@@ -193,13 +193,13 @@ If using Wayland, adapt DISPLAY/socket mounts accordingly.
 | Distortion | Ensure consistent sample rate (48k GUI vs 16k model) |
 | API timeouts | Add retry/backoff, verify endpoint health |
 
-## 🔒 Privacy & Ethics
+##  Privacy & Ethics
 - Streaming only; no persistent storage by default
 - Social media sourced dataset: avoid redistribution without rights
 - Consider adding an in-app consent & transparency panel
 - Provide a local inference option for sensitive environments
 
-## 🤝 Contributing
+##  Contributing
 ```bash
 git checkout -b feature/your-feature
 # make changes
@@ -208,18 +208,18 @@ git push origin feature/your-feature
 ```
 Open a PR describing motivation + screenshots (if UI change).
 
-## 📜 License
+##  License
 MIT (see `LICENSE`).
 
-## 🙏 Acknowledgments
+##  Acknowledgments
 YAMNet (Google), AudioSet, PySide6, open-source community, and individuals who publicly share educational content about Tourette's (ethical use only).
 
-## ⚠️ Disclaimer
+##  Disclaimer
 Not a medical device. Does not treat or diagnose. Always consult healthcare professionals for clinical needs.
 
 ---
 Made with focus on accessibility and dignity.
-## 🧠 AI Architecture
+##  AI Architecture
 
 ### Model Components
 
@@ -245,7 +245,7 @@ Made with focus on accessibility and dignity.
 - **Person-based train/test split**: Prevents data leakage by ensuring no speaker appears in both training and testing sets
 - **Data augmentation**: Applied temporal segmentation through sliding windows to increase dataset size
 
-## 🏗️ Architecture
+##  Architecture
 
 ```
 ┌─────────────────┐    ┌──────────────────┐    ┌─────────────────┐
@@ -261,7 +261,7 @@ Made with focus on accessibility and dignity.
 └─────────────────┘    └──────────────────┘    └─────────────────┘
 ```
 
-## 🌐 Deployment
+##  Deployment
 
 The application is currently deployed and accessible at:
 
@@ -270,7 +270,7 @@ The application is currently deployed and accessible at:
 
 The model inference service runs on Google Cloud Platform, providing scalable and reliable AI processing for real-time audio classification.
 
-## 🚀 Installation
+##  Installation
 
 ### Prerequisites
 
@@ -298,7 +298,7 @@ The model inference service runs on Google Cloud Platform, providing scalable an
    - No additional cloud setup required for basic usage
    
 
-## 🛠️ Development
+##  Development
 
 ### Model Training
 
@@ -331,7 +331,7 @@ The model training pipeline is available in Jupyter notebooks:
 
 
 
-## 📊 Performance Metrics
+##  Performance Metrics
 
 The model is evaluated using standard binary classification metrics:
 
@@ -341,7 +341,7 @@ The model is evaluated using standard binary classification metrics:
 - **F1-Score**: Harmonic mean of precision and recall
 - **Confusion Matrix**: Detailed breakdown of predictions
 
-## 🖥️ Desktop Application
+##  Desktop Application
 
 ### PySide6 Interface
 
@@ -359,3 +359,4 @@ The desktop application provides:
 - **Cloud Communication**: Secure API calls to Google Cloud
 - **Audio Playback**: Filtered audio output to system
 - **UI Management**: PySide6-based user interface
+
