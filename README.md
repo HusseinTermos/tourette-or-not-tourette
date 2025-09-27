@@ -4,7 +4,67 @@ A real-time desktop application that removes stuttering and tics from microphone
 
 ## 🎯 Overview
 
-This application works as a system-wide extension to filter audio input for users with Tourette's syndrome. When the AI detects stuttering or vocal tics, it automatically removes or suppresses them from the microphone stream, allowing for clearer communication across all applications and websites.
+This application woHow to Run
+
+There are two ways to run the app:
+
+    Native (Linux) — simplest for development
+
+    Docker (GUI inside container, API on host) — portable and clean
+
+The app sends each audio block to a Scoring URL as JSON:
+
+{ "audio_base64": "<base64 of PCM block>", "top_k": 3 }
+
+and mutes the block if score < threshold.
+0) Create a virtual “mic” sink (host)
+
+Other apps will use the monitor of this sink as their microphone.
+
+pactl load-module module-null-sink sink_name=VirtualMic sink_properties=device.description=VirtualMic
+# later: pactl unload-module module-null-sink
+
+    On Windows/macOS, use VB-CABLE / BlackHole instead.
+
+1) Native (Linux)
+Prereqs
+
+    Python 3.10+
+
+    PulseAudio or PipeWire (for audio routing)
+
+Install & run
+
+python3 -m venv .venv
+source .venv/bin/activate
+pip install PySide6 sounddevice requests numpy fastapi uvicorn
+
+# (Optional) start a local test API that always returns {"score": 0.4}
+uvicorn server:app --host 127.0.0.1 --port 8000
+# leave it running in a separate terminal
+
+# Run the GUI
+python gui_mic_filter.py
+
+In the GUI
+
+   Input device: your real mic
+
+   Output device: VirtualMic
+
+   Scoring URL: http://127.0.0.1:8000/score (or your deployed endpoint)
+
+   Threshold: 0.5 (default)
+
+   Click Start
+
+With the test API (score = 0.4), the Output meter ~0 (muted).
+
+2) Docker (GUI in container, API on host)
+Build the image
+
+    Apps can’t see the mic → choose “Monitor of VirtualMic” as microphone in the target app.
+rks as a system-wide extension to filter audio input for users with Tourette's syndrome. When the AI detects stuttering or vocal tics, it automatically removes or suppresses them from the microphone stream, allowing for clearer communication across all applications and websites.
 
 ### Key Features
 
@@ -221,3 +281,4 @@ For support, questions, or feature requests:
 
 
 **Note**: This application is designed to assist individuals with Tourette's syndrome but should not replace professional medical advice or treatment.
+
