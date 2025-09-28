@@ -158,7 +158,7 @@ src/
   gui/
 ```
 
-## 📊 Metrics & Evaluation
+## Metrics & Evaluation
 The model was evaluated on a held-out test set of speakers not seen during training.
 
 | Metric    | Score  |
