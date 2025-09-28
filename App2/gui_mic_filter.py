@@ -1,17 +1,72 @@
 # gui_mic_filter.py
-import os, sys, time, queue, threading, base64
+import os, sys, queue, threading, base64, io, wave
 import numpy as np
 import requests
 import sounddevice as sd
 from PySide6 import QtCore, QtWidgets
 
+# ---------- Helpers ----------
+def resample_to_16k(block: np.ndarray, sr: int) -> np.ndarray:
+    """
+    Linear resample to 16 kHz.
+    Input: float32 PCM, shape (frames,) or (frames,channels), at sample rate sr.
+    Output: same shape rank (1D stays 1D; 2D stays 2D) at 16 kHz.
+    """
+    TARGET = 16000
+    if sr == TARGET or block.size == 0:
+        return block.astype(np.float32, copy=False)
+
+    if block.ndim == 1:
+        n_in = block.shape[0]
+        n_out = int(round(n_in * TARGET / sr))
+        if n_out <= 0:
+            return np.zeros((0,), dtype=np.float32)
+        t_in  = np.linspace(0.0, 1.0, n_in,  endpoint=False, dtype=np.float32)
+        t_out = np.linspace(0.0, 1.0, n_out, endpoint=False, dtype=np.float32)
+        return np.interp(t_out, t_in, block.astype(np.float32)).astype(np.float32)
+
+    # 2D: (frames, channels)
+    n_in = block.shape[0]
+    n_out = int(round(n_in * TARGET / sr))
+    if n_out <= 0:
+        return np.zeros((0, block.shape[1]), dtype=np.float32)
+    t_in  = np.linspace(0.0, 1.0, n_in,  endpoint=False, dtype=np.float32)
+    t_out = np.linspace(0.0, 1.0, n_out, endpoint=False, dtype=np.float32)
+    chans = [np.interp(t_out, t_in, block[:, c].astype(np.float32)).astype(np.float32)
+             for c in range(block.shape[1])]
+    return np.stack(chans, axis=1)
+
+def ensure_mono(x: np.ndarray) -> np.ndarray:
+    """Return mono float32 (frames,)."""
+    if x.ndim == 1:
+        return x.astype(np.float32, copy=False)
+    if x.shape[1] == 1:
+        return x[:, 0].astype(np.float32, copy=False)
+    return np.mean(x.astype(np.float32), axis=1, dtype=np.float32)
+
+def float_to_int16(x: np.ndarray) -> np.ndarray:
+    x = np.clip(x, -1.0, 1.0)
+    return (x * 32767.0).astype(np.int16)
+
+def wav_bytes_from_mono_float16k(sig_f32_mono: np.ndarray, sr: int = 16000) -> bytes:
+    """Encode mono float32 @16k as 16-bit PCM WAV bytes."""
+    pcm16 = float_to_int16(sig_f32_mono)
+    with io.BytesIO() as buf:
+        with wave.open(buf, "wb") as wf:
+            wf.setnchannels(1)
+            wf.setsampwidth(2)       # 16-bit
+            wf.setframerate(sr)
+            wf.writeframes(pcm16.tobytes())
+        return buf.getvalue()
+
+# ---------- Engine ----------
 class AudioEngine(QtCore.QObject):
-    meters = QtCore.Signal(float, float)   # in_rms, out_rms
+    meters = QtCore.Signal(float, float)  # in_rms, out_rms
     xruns  = QtCore.Signal(int)
     error  = QtCore.Signal(str)
 
-    def __init__(self, url:str, threshold:float, sr:int, block:int,
-                 in_dev_index:int|None, out_dev_index:int|None, parent=None):
+    def __init__(self, url: str, threshold: float, sr: int, block: int,
+                 in_dev_index: int | None, out_dev_index: int | None, parent=None):
         super().__init__(parent)
         self.url = url
         self.threshold = threshold
@@ -20,14 +75,14 @@ class AudioEngine(QtCore.QObject):
         self.in_dev_index = in_dev_index
         self.out_dev_index = out_dev_index
 
-        self._in_q: queue.Queue[np.ndarray] = queue.Queue(maxsize=32)
-        self._out_q: queue.Queue[np.ndarray] = queue.Queue(maxsize=32)
+        self._in_q: queue.Queue[np.ndarray] = queue.Queue(maxsize=64)
+        self._out_q: queue.Queue[np.ndarray] = queue.Queue(maxsize=256)
         self._stop_flag = threading.Event()
         self._worker_thread: threading.Thread | None = None
         self._stream: sd.Stream | None = None
         self._xruns = 0
         self._sess = requests.Session()
-        self._use_local = os.getenv("USE_LOCAL_SCORER", "0") == "1"  # default OFF for Option A
+        self._use_local = os.getenv("USE_LOCAL_SCORER", "0") == "1"  # default: call API
 
     @staticmethod
     def _caps(idx, want_input):
@@ -46,7 +101,7 @@ class AudioEngine(QtCore.QObject):
     def start(self):
         if self._stream is not None:
             return
-        channels = self._choose_channels()
+        self.channels = self._choose_channels()
         dtype = "float32"
 
         self._stop_flag.clear()
@@ -57,18 +112,26 @@ class AudioEngine(QtCore.QObject):
             if status:
                 self._xruns += 1
                 self.xruns.emit(self._xruns)
+
+            # feed worker
+            chunk = indata.copy()
+            if chunk.ndim == 1:
+                chunk = chunk[:, None]
             try:
-                self._in_q.put_nowait(indata.copy())
+                self._in_q.put_nowait(chunk)
             except queue.Full:
-                pass
+                pass  # drop to keep RT
+
+            # try get processed; if none, output silence
             try:
                 processed = self._out_q.get_nowait()
             except queue.Empty:
                 processed = np.zeros_like(indata)
-
-            in_rms = float(np.sqrt(np.maximum(1e-12, np.mean(indata**2))))
+            # meters
+            in_rms  = float(np.sqrt(np.maximum(1e-12, np.mean(indata**2))))
             out_rms = float(np.sqrt(np.maximum(1e-12, np.mean(processed**2))))
             self.meters.emit(in_rms, out_rms)
+
             outdata[:] = processed
 
         try:
@@ -76,7 +139,7 @@ class AudioEngine(QtCore.QObject):
                 samplerate=self.sr,
                 blocksize=self.block,
                 dtype=dtype,
-                channels=channels,
+                channels=self.channels,
                 callback=audio_cb,
                 device=(self.in_dev_index, self.out_dev_index),
             )
@@ -105,45 +168,84 @@ class AudioEngine(QtCore.QObject):
     def _worker_loop(self):
         url = self.url
         thr = float(self.threshold)
-        timeout_s = 0.5
+        timeout_s = 5.0
+
+        # clip sizing to satisfy API: 1–3 seconds (target ~1.6 s)
+        TARGET_SEC = 1.6
+        MIN_SEC    = 1.1
+        MAX_SEC    = 2.8
+
+        in_sr = float(self.sr)
+        min_frames    = int(MIN_SEC    * in_sr)
+        target_frames = int(TARGET_SEC * in_sr)
+        max_frames    = int(MAX_SEC    * in_sr)
+
+        buf = None  # will become (0, channels) after first chunk
+
         while not self._stop_flag.is_set():
+            # get next input chunk (frames, channels)
             try:
-                chunk = self._in_q.get(timeout=0.1)  # float32, shape (frames, ch)
+                chunk = self._in_q.get(timeout=0.1)
             except queue.Empty:
                 continue
             if chunk is None:
                 break
 
+            if buf is None:
+                buf = chunk[0:0, :]  # empty with same channel count
+            buf = np.concatenate([buf, chunk], axis=0)
+
+            # wait until at least MIN_SEC audio is accumulated
+            if buf.shape[0] < min_frames:
+                continue
+
+            # aim for target; cap at max
+            take = min(buf.shape[0], max_frames)
+            if take < target_frames and buf.shape[0] < target_frames:
+                # accumulate a bit more
+                continue
+
+            # cut a clip out of the buffer
+            block = buf[:take, :]      # (frames, ch) at input SR
+            buf   = buf[take:, :]      # remainder kept for next clip
+
+            # --- Build payload: 16 kHz mono, 16-bit PCM WAV in audio_b64 ---
+            mono_f32 = ensure_mono(block)               # (frames,)
+            mono_16k = resample_to_16k(mono_f32, self.sr)  # 16 kHz, (frames,)
+            wav_bytes = wav_bytes_from_mono_float16k(mono_16k, 16000)
+            payload = {"audio_b64": base64.b64encode(wav_bytes).decode("ascii")}
+
+            prob = 0.0
             if self._use_local:
-                score = 0.4
+                prob = 0.4
             else:
-                # JSON + base64 exact shape you requested
-                raw_bytes = chunk.astype(np.float32).tobytes()
-                audio_b64 = base64.b64encode(raw_bytes).decode("ascii")
-                payload = {"audio_base64": audio_b64, "top_k": 3}
-                score = 0.0
                 try:
                     r = self._sess.post(url, json=payload, timeout=timeout_s)
-                    score = float(r.json().get("score", 0.0))
+                    prob = float(r.json().get("prob", 0.0))
                 except Exception:
-                    score = 0.0  # fail-safe mute
+                    prob = 0.0  # fail-safe: mute
 
-            if score < thr:
-                self._out_q.put(np.zeros_like(chunk))
-            else:
-                self._out_q.put(chunk)
+            # gate the corresponding clip to output queue (delayed by clip length)
+            out_clip = block if prob >= thr else np.zeros_like(block)
 
+            # split into stream-sized blocks for callback to drain smoothly
+            bs = int(self.block)
+            for i in range(0, out_clip.shape[0], bs):
+                self._out_q.put(out_clip[i:i+bs, :])
+
+# ---------- GUI ----------
 class MainWindow(QtWidgets.QWidget):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("Virtual Mic Filter (HTTP Score → Mute below threshold)")
-        self.setMinimumWidth(560)
+        self.setWindowTitle("Virtual Mic Filter (clips 1–3s → HTTP prob → gate)")
+        self.setMinimumWidth(580)
 
         self.in_combo  = QtWidgets.QComboBox()
         self.out_combo = QtWidgets.QComboBox()
         self.refresh_btn = QtWidgets.QPushButton("Refresh devices")
 
-        self.url_edit = QtWidgets.QLineEdit(os.getenv("DEFAULT_SCORE_URL", "http://127.0.0.1:8000/score"))
+        self.url_edit = QtWidgets.QLineEdit(os.getenv("DEFAULT_SCORE_URL",
+                                                      "https://yamnet-tic-u3i46rlgra-ww.a.run.app/predict_b64"))
         self.thr_spin = QtWidgets.QDoubleSpinBox(); self.thr_spin.setRange(0.0, 1.0); self.thr_spin.setSingleStep(0.05); self.thr_spin.setValue(0.5)
         self.sr_spin  = QtWidgets.QSpinBox(); self.sr_spin.setRange(8000, 192000); self.sr_spin.setSingleStep(1000); self.sr_spin.setValue(48000)
         self.block_spin = QtWidgets.QSpinBox(); self.block_spin.setRange(128, 8192); self.block_spin.setSingleStep(128); self.block_spin.setValue(1024)
@@ -161,15 +263,14 @@ class MainWindow(QtWidgets.QWidget):
         grid.addWidget(self.refresh_btn, r,1); r+=1
         grid.addWidget(QtWidgets.QLabel("Scoring URL"), r,0); grid.addWidget(self.url_edit, r,1); r+=1
         grid.addWidget(QtWidgets.QLabel("Threshold"), r,0); grid.addWidget(self.thr_spin, r,1); r+=1
-        grid.addWidget(QtWidgets.QLabel("Sample rate"), r,0); grid.addWidget(self.sr_spin, r,1); r+=1
-        grid.addWidget(QtWidgets.QLabel("Block size"), r,0); grid.addWidget(self.block_spin, r,1); r+=1
+        grid.addWidget(QtWidgets.QLabel("Sample rate (I/O)"), r,0); grid.addWidget(self.sr_spin, r,1); r+=1
+        grid.addWidget(QtWidgets.QLabel("Block size (frames)"), r,0); grid.addWidget(self.block_spin, r,1); r+=1
         grid.addWidget(self.start_btn, r,0); grid.addWidget(self.stop_btn, r,1); r+=1
         grid.addWidget(QtWidgets.QLabel("Input level"), r,0); grid.addWidget(self.in_meter, r,1); r+=1
         grid.addWidget(QtWidgets.QLabel("Output level"), r,0); grid.addWidget(self.out_meter, r,1); r+=1
         grid.addWidget(self.xruns_label, r,0); grid.addWidget(self.status_label, r,1); r+=1
 
         self.engine: AudioEngine | None = None
-
         self.refresh_btn.clicked.connect(self.populate_devices)
         self.start_btn.clicked.connect(self.start_engine)
         self.stop_btn.clicked.connect(self.stop_engine)
