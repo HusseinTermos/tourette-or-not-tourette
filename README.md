@@ -158,8 +158,16 @@ src/
   gui/
 ```
 
-## Metrics & Evaluation
-Use: Accuracy, Precision, Recall, F1, Confusion Matrix. Include per-speaker breakdown when expanding dataset. Add ROC/AUC once you log probabilities systematically.
+## 📊 Metrics & Evaluation
+The model was evaluated on a held-out test set of speakers not seen during training.
+
+| Metric    | Score  |
+|-----------|--------|
+| Accuracy  | 0.7778 |
+| Precision | 0.8095 |
+| Recall    | 0.8947 |
+| F1-Score  | 0.8500 |
+
 
 ## Future Roadmap
 - [ ] Add confidence smoothing (EMA over last N blocks)
