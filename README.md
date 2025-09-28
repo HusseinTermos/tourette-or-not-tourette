@@ -287,12 +287,100 @@ The model inference service runs on Google Cloud Platform, providing scalable an
    git clone https://github.com/HusseinTermos/tourette-or-not-tourette.git
    cd tourette-or-not-tourette
    ```
+2. (Linux) install system libs
+sudo apt update
+sudo apt install -y \
+  python3-venv python3-pip \
+  libportaudio2 libsndfile1 libasound2 \
+  libx11-6 libxext6 libxrender1 libxkbcommon0 libxkbcommon-x11-0 \
+  libxcb1 libxcb-render0 libxcb-shape0 libxcb-xfixes0 \
+  libxcb-icccm4 libxcb-image0 libxcb-keysyms1 libxcb-randr0 \
+  libxcb-util1 libxcb-cursor0 libxcb-xinerama0 \
+  libgl1 libegl1
+# If sounddevice build fails: sudo apt install -y portaudio19-dev
 
-2. **Install dependencies**:
-   ```bash
-   pip install -r requirements.txt
-   ```
+3) Create a virtual mic (host)
 
+Other apps (e.g., Google Meet) will use the monitor of this sink as their microphone.
+
+pactl load-module module-null-sink sink_name=VirtualMic sink_properties=device.description=VirtualMic
+# to remove later: pactl unload-module module-null-sink
+
+4) Create a venv & install Python deps
+
+python3 -m venv .venv
+source .venv/bin/activate
+python -m pip install -U pip
+pip install -r requirements.txt
+
+5) Run the GUI app
+
+python gui_mic_filter.py
+
+In the GUI:
+
+    Input device: your real mic
+
+    Output device: VirtualMic
+
+    Scoring URL: https://yamnet-tic-u3i46rlgra-ww.a.run.app/predict_b64
+
+    Threshold: 0.5
+
+    Click Start.
+
+What the app sends
+
+    One request every ~1.6 s
+
+    JSON body: {"audio_b64": "<base64 of mono 16 kHz 16-bit PCM WAV>"}
+
+    Audio shorter than 1 s or longer than 3 s is not sent (the app batches ~1.6 s by design).
+
+6) Use in Google Meet
+
+    Open Meet → Settings → Audio.
+
+    Set Microphone to “Monitor of VirtualMic”.
+
+        If not visible, create a remapped source:
+
+pactl load-module module-remap-source master=VirtualMic.monitor source_name=VirtualMicMic source_properties=device.description=VirtualMic
+
+Then select VirtualMic (or VirtualMicMic) in Meet.
+
+Option 2 use Docker 
+Docker (Linux)
+
+Run the GUI in a container and route its output to a virtual mic your browser can pick (e.g., for Google Meet).
+
+1) Build the image
+# from repo root
+docker build -f Dockerfile.app -t mic-app .
+
+2) Create a virtual mic on the host
+
+Other apps will use the monitor of this sink as their microphone.
+
+pactl load-module module-null-sink sink_name=VirtualMic \
+  sink_properties=device.description=VirtualMic
+# to remove later: pactl unload-module module-null-sink
+
+3) Run the container (X11)
+
+If your API is already hosted (recommended), set the URL and run:
+
+# allow X clients from docker
+xhost +local:docker
+
+docker run --rm -it \
+  --device /dev/snd \
+  -e DISPLAY=$DISPLAY \
+  -e PULSE_SERVER=unix:/run/user/1000/pulse/native \
+  -e DEFAULT_SCORE_URL="https://yamnet-tic-u3i46rlgra-ww.a.run.app/predict_b64" \
+  -v /tmp/.X11-unix:/tmp/.X11-unix:rw \
+  -v $XDG_RUNTIME_DIR/pulse:/run/user/1000/pulse \
+  mic-app
 3. **Configure API access**:
    - The model is already hosted and accessible via the provided API endpoint
    - No additional cloud setup required for basic usage
@@ -359,4 +447,5 @@ The desktop application provides:
 - **Cloud Communication**: Secure API calls to Google Cloud
 - **Audio Playback**: Filtered audio output to system
 - **UI Management**: PySide6-based user interface
+
 
