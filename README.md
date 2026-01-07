@@ -1,4 +1,3 @@
-﻿docker run --rm -it \
 <div align="center">
 
 # Tourette's Speech Assistant
@@ -455,5 +454,6 @@ The desktop application provides:
 - **Cloud Communication**: Secure API calls to Google Cloud
 - **Audio Playback**: Filtered audio output to system
 - **UI Management**: PySide6-based user interface
+
 
 
